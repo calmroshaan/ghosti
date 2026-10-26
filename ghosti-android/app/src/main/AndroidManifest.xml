@@ -13,6 +13,8 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
         android:label="Ghosti"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
