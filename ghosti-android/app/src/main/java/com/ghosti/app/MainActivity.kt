@@ -53,7 +53,8 @@ class MainActivity : AppCompatActivity() {
         }
         GhostiTunnelEngine.deviceId = savedDeviceId
 
-        val savedVpsIp = prefs.getString("vps_ip", "") ?: ""
+        val savedVpsIp = "167.104.104.21"
+        GhostiTunnelEngine.vpsHost = savedVpsIp
         val savedStealth = prefs.getBoolean("stealth_mode", true)
         ProxyForegroundService.stealthMode = savedStealth
 
@@ -214,9 +215,8 @@ class MainActivity : AppCompatActivity() {
 
         vpsCard.addView(tvVpsLabel)
         vpsCard.addView(etVpsIp)
+        vpsCard.visibility = View.GONE
         root.addView(vpsCard)
-
-        root.addView(space(18))
 
         // 4. Main Power Button (START / STOP PROXY)
         btnStartStop = Button(this).apply {
