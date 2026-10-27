@@ -12,9 +12,9 @@ const crypto = require('crypto');
 
 // Main control port where Ghosti Android App connects
 const CONTROL_PORT = 9000;
-// Starting port range for Dolphin{anty} proxy profiles (10001, 10002, ...)
+// Starting port range for Dolphin{anty} proxy profiles (10001 to 10500 = 500 ports)
 const BASE_PROXY_PORT = 10001;
-const MAX_PROXY_PORT = 10100;
+const MAX_PROXY_PORT = 10500;
 
 // Active Phone Sessions: deviceId -> session object
 const devices = new Map();
