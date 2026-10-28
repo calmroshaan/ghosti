@@ -383,6 +383,7 @@ class MainActivity : AppCompatActivity() {
 
         stealthCard.addView(stealthTextCol)
         stealthCard.addView(switchStealth)
+        stealthCard.visibility = View.GONE
         root.addView(stealthCard)
 
         scrollView.addView(root)
@@ -410,14 +411,9 @@ class MainActivity : AppCompatActivity() {
                 action = ProxyForegroundService.ACTION_START
                 putExtra("vpsHost", host)
                 putExtra("deviceId", GhostiTunnelEngine.deviceId)
-                putExtra("stealth", switchStealth.isChecked)
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(startIntent)
-            } else {
-                startService(startIntent)
-            }
+            startService(startIntent)
             refreshUI()
         }
     }

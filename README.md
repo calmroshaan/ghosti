@@ -32,3 +32,82 @@ Ghosti turns any Android smartphone (connected to Wi-Fi or 4G/5G mobile data) in
                 │ (Direct Internet Exit)
                 ▼
         [ Target Website ] (Sees Phone's Real Residential IP)
+
+
+📁 Project Structure
+
+Ghosti/
+├── .github/workflows/
+│   └── build-apk.yml          # Automated cloud build pipeline for Ghosti APK
+├── vps-relay-server/
+│   ├── server.js              # Reverse proxy relay & authentication engine (Node.js)
+│   └── start-server.bat       # Auto-starter & firewall port opener (10001-10500)
+├── ghosti-android/            # Native Android project (Kotlin)
+│   ├── app/
+│   │   ├── src/main/
+│   │   │   ├── AndroidManifest.xml
+│   │   │   ├── java/com/ghosti/app/
+│   │   │   │   ├── MainActivity.kt           # Blue-tech UI & device controls
+│   │   │   │   ├── ProxyForegroundService.kt # 24/7 background service
+│   │   │   │   └── GhostiTunnelEngine.kt     # Reverse tunnel & network monitor
+│   │   │   └── res/drawable/
+│   │   │       └── ic_launcher.xml           # Custom Ghosti cyber icon
+│   │   └── build.gradle
+│   ├── build.gradle
+│   ├── gradle.properties
+│   └── settings.gradle
+└── README.md
+
+🛠️ Setup Instructions
+
+1. VPS Relay Server Setup (Windows VPS)
+Copy the vps-relay-server folder to your VPS desktop.
+
+Ensure Node.js (v18+ or v20+ LTS) is installed on the VPS.
+
+Right-click start-server.bat and select Run as administrator.
+
+The server will automatically configure Windows Firewall rules for:
+
+Control Port: 9000 (TCP)
+
+Proxy Ports: 10001 - 10500 (TCP)
+
+Keep the command prompt window open (it auto-restarts if interrupted).
+
+2. Android App Installation
+Download the generated Ghosti-Android-APK.zip from your GitHub repository under Actions > latest build run > Artifacts.
+
+Extract the ZIP and transfer app-debug.apk to any Android phone.
+
+Install the APK (allow Install from unknown sources if prompted).
+
+Launch Ghosti, grant battery optimization permission, and tap START PROXY SERVER.
+
+The screen will immediately display:
+
+Current Phone Public IP & ISP
+
+Dedicated Proxy Port (10001, 10002, etc.)
+
+Generated Username and Password
+
+One-click copy format for Dolphin{anty}
+
+3. Dolphin{anty} / Antidetect Browser Configuration
+Create a new profile in Dolphin{anty}.
+
+In the Proxy section, select SOCKS5 or HTTP.
+
+Paste the credentials string in the format:
+VPS_IP:PORT:USERNAME:PASSWORD
+(Example: 167.104.104.21:10001:gh_ab123:x9y8z7w6)
+
+Click Check Proxy — it should show the Android phone's IP and country.
+
+Launch the profile.
+
+🔒 Security & IP Leak Protection
+No Direct Fallback: If the phone loses connection, the browser fails closed (Proxy Connection Refused). It never falls back to your local internet.
+
+WebRTC Protection: In your antidetect browser, ensure WebRTC is set to Altered or Disabled to match the proxy IP.
