@@ -1,9 +1,14 @@
-name: Build Ghosti APK
+name: Build Ghosti APK & Deploy Website
 
 on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -36,3 +41,22 @@ jobs:
         with:
           name: Ghosti-Android-APK
           path: ghosti-android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Attach Ghosti.apk to Download Website
+        run: cp ghosti-android/app/build/outputs/apk/debug/app-debug.apk docs/Ghosti.apk
+
+      - name: Upload GitHub Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Download Website to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
