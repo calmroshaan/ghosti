@@ -124,27 +124,18 @@ class ProxyForegroundService : Service() {
         val priority = if (stealthMode) NotificationCompat.PRIORITY_MIN else NotificationCompat.PRIORITY_LOW
 
         val builder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setSmallIcon(R.drawable.ic_launcher)
             .setOngoing(true)
             .setSilent(true)
+            .setShowWhen(false)
             .setPriority(priority)
-            .setVisibility(
-                if (stealthMode) NotificationCompat.VISIBILITY_SECRET
-                else NotificationCompat.VISIBILITY_PUBLIC
-            )
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .setContentIntent(pendingIntent)
 
         if (stealthMode) {
-            builder.setContentTitle("System Sync")
-            builder.setContentText("Background service active")
+            builder.setContentTitle("Ghosti • Connected")
         } else {
-            val portInfo = if (GhostiTunnelEngine.assignedPort > 0) {
-                "Port ${GhostiTunnelEngine.assignedPort}"
-            } else {
-                "Connecting..."
-            }
-            builder.setContentTitle("Ghosti Proxy Active ($portInfo)")
-            builder.setContentText("Public IP: ${GhostiTunnelEngine.publicIp}")
+            builder.setContentTitle("Ghosti • Online")
         }
 
         return builder.build()
