@@ -44,16 +44,20 @@ function startProxyServerForDevice(device) {
   const proxyServer = net.createServer((browserSocket) => {
     browserSocket.setNoDelay(true);
 
-    // KILL-SWITCH CHECK 1: Is the phone control tunnel alive?
-    if (!device.controlSocket || device.controlSocket.destroyed || !device.online) {
-      browserSocket.destroy();
-      return;
-    }
-
     // Handle initial handshake from Dolphin{anty} / Browser (SOCKS5 or HTTP CONNECT)
+    // Never raw-destroy before reading request so Chromium NEVER falls back to DIRECT Wi-Fi
     browserSocket.once('data', (firstChunk) => {
       if (!device.controlSocket || device.controlSocket.destroyed || !device.online) {
-        browserSocket.destroy();
+        if (firstChunk[0] !== 0x05) {
+          browserSocket.end(
+            'HTTP/1.1 502 Bad Gateway\r\n' +
+            'Connection: close\r\n' +
+            'Content-Type: text/plain\r\n\r\n' +
+            'Ghosti Kill-Switch Active: Phone is offline. Connection blocked to prevent IP leak.'
+          );
+        } else {
+          browserSocket.end(Buffer.from([0x05, 0x01]));
+        }
         return;
       }
 

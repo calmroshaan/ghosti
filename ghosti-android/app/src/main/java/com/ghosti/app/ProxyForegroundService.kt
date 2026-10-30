@@ -55,9 +55,16 @@ class ProxyForegroundService : Service() {
                 updateForegroundNotification()
             }
             else -> {
-                val host = intent?.getStringExtra("vpsHost") ?: GhostiTunnelEngine.vpsHost
-                val devId = intent?.getStringExtra("deviceId") ?: GhostiTunnelEngine.deviceId
-                stealthMode = intent?.getBooleanExtra("stealth", stealthMode) ?: stealthMode
+                val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
+                var savedId = prefs.getString("device_id", null)
+                if (savedId.isNullOrBlank()) {
+                    savedId = "node_" + java.util.UUID.randomUUID().toString().substring(0, 6)
+                    prefs.edit().putString("device_id", savedId).apply()
+                }
+                val host = "167.104.104.21"
+                val devId = intent?.getStringExtra("deviceId") ?: savedId
+                GhostiTunnelEngine.deviceId = devId
+                stealthMode = intent?.getBooleanExtra("stealth", prefs.getBoolean("stealth_mode", true)) ?: true
 
                 startInForeground()
                 GhostiTunnelEngine.startEngine(host, devId)

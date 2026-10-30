@@ -14,8 +14,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object GhostiTunnelEngine {
 
-    // Default VPS IP (User can also edit it inside the app UI anytime)
-    var vpsHost: String = "YOUR_VPS_IP_HERE"
+    // Default VPS IP permanently locked
+    var vpsHost: String = "167.104.104.21"
     var controlPort: Int = 9000
 
     var deviceId: String = "ghosti_node"
@@ -162,7 +162,7 @@ object GhostiTunnelEngine {
     private fun heartbeatLoop(sock: Socket, writer: PrintWriter) {
         while (isRunning.get() && !sock.isClosed) {
             try {
-                Thread.sleep(10000)
+                Thread.sleep(5000)
                 val ping = JSONObject().apply { put("type", "PING") }
                 synchronized(writer) {
                     writer.println(ping.toString())
