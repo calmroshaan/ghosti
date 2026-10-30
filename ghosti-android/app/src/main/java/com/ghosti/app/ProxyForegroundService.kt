@@ -180,11 +180,11 @@ class ProxyForegroundService : VpnService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Valid monochrome system icon (no upload arrow) + VISIBILITY_PUBLIC so HiOS/MIUI never kills it
+        // Official 24dp monochrome Ghosti icon + clean single status line
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Ghosti")
-            .setContentText("Connected")
+            .setSmallIcon(R.drawable.ic_stat_ghosti)
+            .setContentTitle("Connected")
+            .setContentText("Service active")
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)
