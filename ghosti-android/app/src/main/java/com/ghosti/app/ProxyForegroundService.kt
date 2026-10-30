@@ -1,6 +1,5 @@
 package com.ghosti.app
 
-import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -15,11 +14,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
-import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import java.util.UUID
 
@@ -28,14 +24,11 @@ class ProxyForegroundService : Service() {
     companion object {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
-        const val ACTION_WATCHDOG = "ACTION_WATCHDOG"
-        const val ACTION_UPDATE_STEALTH = "ACTION_UPDATE_STEALTH"
-
-        private const val CHANNEL_PERSISTENT = "ghosti_persistent_service_v3"
+        private const val CHANNEL_ID = "ghosti_connected_channel"
         private const val NOTIF_ID = 1001
-        private const val WATCHDOG_REQ_CODE = 3003
 
-        var stealthMode: Boolean = false
+        @Volatile
+        var isServiceRunning: Boolean = false
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -43,27 +36,9 @@ class ProxyForegroundService : Service() {
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val keepAliveRunnable = object : Runnable {
-        override fun run() {
-            val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
-            val shouldBeActive = prefs.getBoolean("proxy_active", false)
-            if (shouldBeActive) {
-                acquireLocks()
-                startInForeground()
-                val savedId = prefs.getString("device_id", GhostiTunnelEngine.deviceId) ?: "ghosti_node"
-                if (!GhostiTunnelEngine.isRunning.get()) {
-                    GhostiTunnelEngine.startEngine("167.104.104.21", savedId)
-                }
-                scheduleWatchdogAlarm(45000L)
-                mainHandler.postDelayed(this, 25000L)
-            }
-        }
-    }
-
     override fun onCreate() {
         super.onCreate()
-        acquireLocks()
+        acquirePersistentLocks()
         registerNetworkMonitor()
     }
 
@@ -71,17 +46,16 @@ class ProxyForegroundService : Service() {
         val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
 
         if (intent?.action == ACTION_STOP) {
+            isServiceRunning = false
             prefs.edit().putBoolean("proxy_active", false).apply()
-            mainHandler.removeCallbacks(keepAliveRunnable)
-            cancelWatchdogAlarm()
             GhostiTunnelEngine.stopEngine()
-            releaseLocks()
+            releasePersistentLocks()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
 
-        // Start or Watchdog / Sticky resume
+        isServiceRunning = true
         prefs.edit().putBoolean("proxy_active", true).apply()
 
         var savedId = prefs.getString("device_id", null)
@@ -94,94 +68,29 @@ class ProxyForegroundService : Service() {
         val devId = intent?.getStringExtra("deviceId") ?: savedId
         GhostiTunnelEngine.deviceId = devId
 
-        acquireLocks()
+        acquirePersistentLocks()
         startInForeground()
-        GhostiTunnelEngine.startEngine(host, devId)
 
-        // Start 25-second live foreground refresh & 45-second AlarmManager watchdog
-        mainHandler.removeCallbacks(keepAliveRunnable)
-        mainHandler.postDelayed(keepAliveRunnable, 25000L)
-        scheduleWatchdogAlarm(45000L)
+        if (!GhostiTunnelEngine.isRunning.get()) {
+            GhostiTunnelEngine.startEngine(host, devId)
+        }
 
         return START_STICKY
     }
 
-    /**
-     * Triggered immediately when user swipes the app away from RAM / Recent Apps
-     */
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // Keeps the service alive when swiped from RAM without restarting or dropping
         val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
         if (prefs.getBoolean("proxy_active", false)) {
-            acquireLocks()
+            acquirePersistentLocks()
             startInForeground()
-            scheduleWatchdogAlarm(3000L)
         }
         super.onTaskRemoved(rootIntent)
     }
 
-    private fun scheduleWatchdogAlarm(delayMs: Long) {
-        try {
-            val restartIntent = Intent(applicationContext, ProxyForegroundService::class.java).apply {
-                action = ACTION_WATCHDOG
-                putExtra("vpsHost", "167.104.104.21")
-                putExtra("deviceId", GhostiTunnelEngine.deviceId)
-            }
-
-            val pi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                PendingIntent.getForegroundService(
-                    applicationContext,
-                    WATCHDOG_REQ_CODE,
-                    restartIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            } else {
-                PendingIntent.getService(
-                    applicationContext,
-                    WATCHDOG_REQ_CODE,
-                    restartIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            }
-
-            val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val triggerAt = SystemClock.elapsedRealtime() + delayMs
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
-            } else {
-                am.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun cancelWatchdogAlarm() {
-        try {
-            val restartIntent = Intent(applicationContext, ProxyForegroundService::class.java).apply {
-                action = ACTION_WATCHDOG
-            }
-            val pi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                PendingIntent.getForegroundService(
-                    applicationContext,
-                    WATCHDOG_REQ_CODE,
-                    restartIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            } else {
-                PendingIntent.getService(
-                    applicationContext,
-                    WATCHDOG_REQ_CODE,
-                    restartIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            }
-            val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            am.cancel(pi)
-        } catch (_: Exception) {}
-    }
-
     private fun startInForeground() {
         try {
-            val notification = buildNotification()
+            val notification = buildSimpleNotification()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     NOTIF_ID,
@@ -194,16 +103,16 @@ class ProxyForegroundService : Service() {
         } catch (_: Exception) {}
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildSimpleNotification(): Notification {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_PERSISTENT,
-                "Ghosti Active Proxy",
+                CHANNEL_ID,
+                "Ghosti Connection",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps Ghosti proxy active 24/7"
+                description = "Shows Ghosti connection status"
                 setShowBadge(false)
                 enableLights(false)
                 enableVibration(false)
@@ -220,59 +129,55 @@ class ProxyForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val portText = if (GhostiTunnelEngine.assignedPort > 0) {
-            "Port ${GhostiTunnelEngine.assignedPort}"
-        } else {
-            "Online"
-        }
-
-        val upMb = String.format("%.1f", GhostiTunnelEngine.bytesUp / (1024.0 * 1024.0))
-        val downMb = String.format("%.1f", GhostiTunnelEngine.bytesDown / (1024.0 * 1024.0))
-
-        return NotificationCompat.Builder(this, CHANNEL_PERSISTENT)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentTitle("Ghosti Active ($portText)")
-            .setContentText("IP: ${GhostiTunnelEngine.publicIp} • Up: ${upMb}MB Down: ${downMb}MB")
+        // Ultra-clean, static, non-questionable notification
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentTitle("Ghosti")
+            .setContentText("Connected")
             .setOngoing(true)
             .setSilent(true)
-            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .setContentIntent(pendingIntent)
             .build()
     }
 
     @Suppress("DEPRECATION")
-    private fun acquireLocks() {
+    private fun acquirePersistentLocks() {
         try {
-            if (wakeLock?.isHeld != true) {
+            if (wakeLock == null) {
                 val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
                 wakeLock = pm.newWakeLock(
                     PowerManager.PARTIAL_WAKE_LOCK,
-                    "Ghosti::ProxyWakeLock"
+                    "Ghosti::PersistentWakeLock"
                 ).apply {
                     setReferenceCounted(false)
-                    acquire()
                 }
+            }
+            if (wakeLock?.isHeld != true) {
+                wakeLock?.acquire()
             }
         } catch (_: Exception) {}
 
         try {
-            if (wifiLock?.isHeld != true) {
+            if (wifiLock == null) {
                 val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
                 wifiLock = wm.createWifiLock(
                     WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-                    "Ghosti::ProxyWifiLock"
+                    "Ghosti::PersistentWifiLock"
                 ).apply {
                     setReferenceCounted(false)
-                    acquire()
                 }
+            }
+            if (wifiLock?.isHeld != true) {
+                wifiLock?.acquire()
             }
         } catch (_: Exception) {}
     }
 
-    private fun releaseLocks() {
+    private fun releasePersistentLocks() {
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
@@ -296,8 +201,10 @@ class ProxyForegroundService : Service() {
 
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    if (GhostiTunnelEngine.isRunning.get()) {
-                        Thread { GhostiTunnelEngine.fetchPublicIp() }.start()
+                    if (isServiceRunning && !GhostiTunnelEngine.isRunning.get()) {
+                        val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
+                        val savedId = prefs.getString("device_id", GhostiTunnelEngine.deviceId) ?: "ghosti_node"
+                        GhostiTunnelEngine.startEngine("167.104.104.21", savedId)
                     }
                 }
             }
@@ -307,15 +214,10 @@ class ProxyForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        mainHandler.removeCallbacks(keepAliveRunnable)
         try {
             networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
         } catch (_: Exception) {}
-        releaseLocks()
-        val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("proxy_active", false)) {
-            scheduleWatchdogAlarm(2000L)
-        }
+        releasePersistentLocks()
         super.onDestroy()
     }
 
