@@ -129,9 +129,9 @@ class ProxyForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Ultra-clean, static, non-questionable notification
+        // Ultra-clean, static, non-questionable notification (No upload arrow, no stats)
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle("Ghosti")
             .setContentText("Connected")
             .setOngoing(true)
