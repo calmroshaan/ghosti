@@ -299,32 +299,12 @@ class MainActivity : AppCompatActivity() {
             background = roundedBox("#0D9488", 10)
             layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply {
                 leftMargin = dp(6)
-                rightMargin = dp(6)
             }
             setOnClickListener { shareCredentials() }
         }
 
-        val btnReset = Button(this).apply {
-            text = "New Pass"
-            setTextColor(Color.WHITE)
-            isAllCaps = false
-            background = roundedBox("#475569", 10)
-            layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply {
-                leftMargin = dp(6)
-            }
-            setOnClickListener {
-                if (GhostiTunnelEngine.isConnected.get()) {
-                    GhostiTunnelEngine.rotateCredentials()
-                    Toast.makeText(this@MainActivity, "Generating new password...", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this@MainActivity, "Start Proxy first!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-
         btnRow.addView(btnCopy)
         btnRow.addView(btnShare)
-        btnRow.addView(btnReset)
 
         credsCard.addView(tvCredsTitle)
         credsCard.addView(tvCredsBox)

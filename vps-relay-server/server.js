@@ -2,19 +2,20 @@
  * GHOSTI - Multi-Phone Reverse Proxy Relay Server
  * Features:
  * - Supports SOCKS5 & HTTP Connect (Dolphin{anty}, AdsPower, Extensions)
- * - Username/Password Authentication per Phone
- * - STRICT KILL-SWITCH (Zero IP Leak: Never routes traffic via VPS directly)
- * - Auto-assigns a dedicated Port & Credentials to each connected Android Phone
+ * - Permanent Disk Storage (devices.json) -> Credentials NEVER change on VPS restart or migration
+ * - STRICT PROTOCOL KILL-SWITCH (Zero IP Leak: Returns 502/SOCKS error when offline so Chrome never falls back to Wi-Fi)
+ * - Supports 500 phones (Ports 10001 - 10500)
  */
 
 const net = require('net');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
-// Main control port where Ghosti Android App connects
 const CONTROL_PORT = 9000;
-// Starting port range for Dolphin{anty} proxy profiles (10001 to 10500 = 500 ports)
 const BASE_PROXY_PORT = 10001;
 const MAX_PROXY_PORT = 10500;
+const DB_FILE = path.join(__dirname, 'devices.json');
 
 // Active Phone Sessions: deviceId -> session object
 const devices = new Map();
@@ -23,6 +24,61 @@ const usedPorts = new Map();
 
 function generateRandomString(len = 6) {
   return crypto.randomBytes(Math.ceil(len / 2)).toString('hex').slice(0, len);
+}
+
+/**
+ * Saves all registered device credentials permanently to devices.json
+ */
+function saveDatabase() {
+  try {
+    const data = {};
+    for (const [id, dev] of devices.entries()) {
+      data[id] = {
+        deviceId: dev.deviceId,
+        proxyPort: dev.proxyPort,
+        username: dev.username,
+        password: dev.password,
+      };
+    }
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[Ghosti] Failed to save devices.json:', err.message);
+  }
+}
+
+/**
+ * Loads saved device credentials from devices.json on server start
+ */
+function loadDatabase() {
+  try {
+    if (!fs.existsSync(DB_FILE)) return;
+    const raw = fs.readFileSync(DB_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    for (const id of Object.keys(data)) {
+      const item = data[id];
+      if (item && item.deviceId && item.proxyPort && item.username && item.password) {
+        const device = {
+          deviceId: item.deviceId,
+          proxyPort: item.proxyPort,
+          username: item.username,
+          password: item.password,
+          controlSocket: null,
+          online: false,
+          bytesUp: 0,
+          bytesDown: 0,
+          pendingTunnels: new Map(),
+          activeSockets: new Set(),
+          proxyServer: null,
+        };
+        usedPorts.set(device.proxyPort, device.deviceId);
+        device.proxyServer = startProxyServerForDevice(device);
+        devices.set(device.deviceId, device);
+      }
+    }
+    console.log(`[Ghosti] Restored ${devices.size} permanent device(s) from devices.json`);
+  } catch (err) {
+    console.error('[Ghosti] Failed to load devices.json:', err.message);
+  }
 }
 
 function allocatePort(preferredPort) {
@@ -37,8 +93,6 @@ function allocatePort(preferredPort) {
 
 /**
  * Starts a dedicated Proxy Listener Port for a specific Android phone.
- * STRICT KILL-SWITCH: If the phone is not actively connected or drops mid-stream,
- * the socket is immediately destroyed. Traffic NEVER exits through the VPS directly.
  */
 function startProxyServerForDevice(device) {
   const proxyServer = net.createServer((browserSocket) => {
@@ -51,9 +105,9 @@ function startProxyServerForDevice(device) {
         if (firstChunk[0] !== 0x05) {
           browserSocket.end(
             'HTTP/1.1 502 Bad Gateway\r\n' +
-            'Connection: close\r\n' +
-            'Content-Type: text/plain\r\n\r\n' +
-            'Ghosti Kill-Switch Active: Phone is offline. Connection blocked to prevent IP leak.'
+              'Connection: close\r\n' +
+              'Content-Type: text/plain\r\n\r\n' +
+              'Ghosti Kill-Switch Active: Phone is offline. Connection blocked to prevent IP leak.'
           );
         } else {
           browserSocket.end(Buffer.from([0x05, 0x01]));
@@ -61,11 +115,9 @@ function startProxyServerForDevice(device) {
         return;
       }
 
-      // Case 1: SOCKS5 Handshake (First byte === 0x05)
       if (firstChunk[0] === 0x05) {
         handleSocks5BrowserClient(browserSocket, firstChunk, device);
       } else {
-        // Case 2: HTTP/HTTPS Proxy Request (CONNECT / GET / POST ...)
         handleHttpBrowserClient(browserSocket, firstChunk, device);
       }
     });
@@ -93,13 +145,11 @@ function handleSocks5BrowserClient(browserSocket, greeting, device) {
   const nmethods = greeting[1] || 0;
   const methods = greeting.slice(2, 2 + nmethods);
 
-  // Require Username/Password Auth (0x02)
   if (!methods.includes(0x02)) {
     browserSocket.end(Buffer.from([0x05, 0xff]));
     return;
   }
 
-  // Tell browser to send Username/Password (0x05, 0x02)
   browserSocket.write(Buffer.from([0x05, 0x02]));
 
   browserSocket.once('data', (authChunk) => {
@@ -114,15 +164,12 @@ function handleSocks5BrowserClient(browserSocket, greeting, device) {
       const password = authChunk.slice(3 + ulen, 3 + ulen + plen).toString('utf8');
 
       if (username !== device.username || password !== device.password) {
-        console.log(`[Ghosti] Auth failed on port ${device.proxyPort}`);
         browserSocket.end(Buffer.from([0x01, 0x01]));
         return;
       }
 
-      // Auth success
       browserSocket.write(Buffer.from([0x01, 0x00]));
 
-      // Next chunk is the SOCKS5 Connect Request (0x05, 0x01, 0x00, ATYP, DST.ADDR, DST.PORT)
       browserSocket.once('data', (reqChunk) => {
         if (reqChunk[0] !== 0x05 || reqChunk[1] !== 0x01) {
           browserSocket.end(Buffer.from([0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
@@ -134,16 +181,13 @@ function handleSocks5BrowserClient(browserSocket, greeting, device) {
         let targetPort = 0;
 
         if (atyp === 0x01) {
-          // IPv4
           targetHost = `${reqChunk[4]}.${reqChunk[5]}.${reqChunk[6]}.${reqChunk[7]}`;
           targetPort = reqChunk.readUInt16BE(8);
         } else if (atyp === 0x03) {
-          // Domain Name
           const dlen = reqChunk[4];
           targetHost = reqChunk.slice(5, 5 + dlen).toString('utf8');
           targetPort = reqChunk.readUInt16BE(5 + dlen);
         } else if (atyp === 0x04) {
-          // IPv6
           const parts = [];
           for (let i = 0; i < 8; i++) {
             parts.push(reqChunk.readUInt16BE(4 + i * 2).toString(16));
@@ -157,11 +201,9 @@ function handleSocks5BrowserClient(browserSocket, greeting, device) {
 
         openTunnelToPhone(device, targetHost, targetPort, (err, phoneStream) => {
           if (err || !phoneStream) {
-            // Kill-switch: fail closed
             browserSocket.end(Buffer.from([0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
             return;
           }
-          // Send SOCKS5 success reply
           browserSocket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
           pipeSocketsWithStats(browserSocket, phoneStream, device);
         });
@@ -180,7 +222,6 @@ function handleHttpBrowserClient(browserSocket, firstChunk, device) {
   const lines = headerStr.split('\r\n');
   const firstLine = lines[0] || '';
 
-  // Verify Proxy-Authorization: Basic base64(user:pass)
   const authLine = lines.find((l) => l.toLowerCase().startsWith('proxy-authorization:'));
   let authorized = false;
   if (authLine) {
@@ -222,7 +263,6 @@ function handleHttpBrowserClient(browserSocket, firstChunk, device) {
       pipeSocketsWithStats(browserSocket, phoneStream, device);
     });
   } else {
-    // Plain HTTP request (e.g. GET http://api.ipify.org/ HTTP/1.1)
     try {
       const urlObj = new URL(rawTarget);
       const host = urlObj.hostname;
@@ -233,7 +273,6 @@ function handleHttpBrowserClient(browserSocket, firstChunk, device) {
           browserSocket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
           return;
         }
-        // Strip Proxy-Authorization header before forwarding
         const cleanedLines = lines.filter(
           (l) => !l.toLowerCase().startsWith('proxy-authorization:')
         );
@@ -268,7 +307,6 @@ function openTunnelToPhone(device, targetHost, targetPort, callback) {
     },
   });
 
-  // Send JSON command over control channel to the Android Phone
   const cmd = JSON.stringify({
     type: 'OPEN_TUNNEL',
     tunnelId,
@@ -333,6 +371,9 @@ function killAllDeviceTraffic(device) {
   device.activeSockets.clear();
 }
 
+// Load saved permanent devices before starting control server
+loadDatabase();
+
 /**
  * Main Control Server (Port 9000): Handles Android Phone Registration & Reverse Data Channels
  */
@@ -362,10 +403,9 @@ const controlServer = net.createServer((socket) => {
         return;
       }
 
-      // 1. Phone Control Registration
+      // 1. Phone Control Registration (Permanent Credentials)
       if (msg.type === 'REGISTER') {
         const deviceId = msg.deviceId || generateRandomString(8);
-        const resetCreds = Boolean(msg.resetCredentials);
 
         let device = devices.get(deviceId);
         if (!device) {
@@ -386,17 +426,13 @@ const controlServer = net.createServer((socket) => {
           usedPorts.set(proxyPort, deviceId);
           device.proxyServer = startProxyServerForDevice(device);
           devices.set(deviceId, device);
+          saveDatabase();
         } else {
-          // Existing phone reconnected
+          // Existing phone reconnected -> Keep exact same Port, Username & Password forever
           if (device.controlSocket && !device.controlSocket.destroyed && device.controlSocket !== socket) {
             try {
               device.controlSocket.destroy();
             } catch (_) {}
-          }
-          if (resetCreds) {
-            device.username = 'gh_' + generateRandomString(5);
-            device.password = generateRandomString(8);
-            killAllDeviceTraffic(device);
           }
           device.controlSocket = socket;
           device.online = true;
@@ -433,7 +469,6 @@ const controlServer = net.createServer((socket) => {
         const pending = device.pendingTunnels.get(tunnelId);
         device.pendingTunnels.delete(tunnelId);
 
-        // If any remaining bytes were buffered after the newline, push them back
         if (buffer.length > 0) {
           socket.unshift(Buffer.from(buffer, 'utf8'));
           buffer = '';
@@ -451,25 +486,6 @@ const controlServer = net.createServer((socket) => {
               type: 'PONG',
               bytesUp: registeredDevice.bytesUp,
               bytesDown: registeredDevice.bytesDown,
-            }) + '\n'
-          );
-        }
-      }
-
-      // 4. Phone requested credential rotation
-      else if (msg.type === 'ROTATE_CREDENTIALS') {
-        if (registeredDevice) {
-          killAllDeviceTraffic(registeredDevice);
-          registeredDevice.online = true;
-          registeredDevice.username = 'gh_' + generateRandomString(5);
-          registeredDevice.password = generateRandomString(8);
-          socket.write(
-            JSON.stringify({
-              type: 'REGISTERED',
-              deviceId: registeredDevice.deviceId,
-              proxyPort: registeredDevice.proxyPort,
-              username: registeredDevice.username,
-              password: registeredDevice.password,
             }) + '\n'
           );
         }
@@ -495,6 +511,7 @@ controlServer.listen(CONTROL_PORT, '0.0.0.0', () => {
   console.log(' GHOSTI VPS RELAY SERVER RUNNING');
   console.log(` Control Port (For Android Apps) : ${CONTROL_PORT}`);
   console.log(` Proxy Ports (For Dolphin{anty}) : ${BASE_PROXY_PORT} - ${MAX_PROXY_PORT}`);
+  console.log(' Permanent Storage (devices.json): ENABLED');
   console.log(' Strict Kill-Switch              : ENABLED (Zero IP Leak)');
   console.log('====================================================');
 });
