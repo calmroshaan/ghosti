@@ -24,9 +24,11 @@ class ProxyForegroundService : Service() {
     companion object {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
-        private const val CHANNEL_ID = "ghosti_connected_channel"
+        const val ACTION_UPDATE_STEALTH = "ACTION_UPDATE_STEALTH"
+        private const val CHANNEL_ID = "ghosti_connected_channel_v4"
         private const val NOTIF_ID = 1001
 
+        var stealthMode: Boolean = true
         @Volatile
         var isServiceRunning: Boolean = false
     }
@@ -45,41 +47,48 @@ class ProxyForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
 
-        if (intent?.action == ACTION_STOP) {
-            isServiceRunning = false
-            prefs.edit().putBoolean("proxy_active", false).apply()
-            GhostiTunnelEngine.stopEngine()
-            releasePersistentLocks()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                isServiceRunning = false
+                prefs.edit().putBoolean("proxy_active", false).apply()
+                GhostiTunnelEngine.stopEngine()
+                releasePersistentLocks()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_UPDATE_STEALTH -> {
+                stealthMode = intent.getBooleanExtra("stealth", stealthMode)
+                return START_STICKY
+            }
+            else -> {
+                isServiceRunning = true
+                prefs.edit().putBoolean("proxy_active", true).apply()
+
+                var savedId = prefs.getString("device_id", null)
+                if (savedId.isNullOrBlank()) {
+                    savedId = "node_" + UUID.randomUUID().toString().substring(0, 6)
+                    prefs.edit().putString("device_id", savedId).apply()
+                }
+
+                val host = "167.104.104.21"
+                val devId = intent?.getStringExtra("deviceId") ?: savedId
+                GhostiTunnelEngine.deviceId = devId
+                stealthMode = intent?.getBooleanExtra("stealth", true) ?: true
+
+                acquirePersistentLocks()
+                startInForeground()
+
+                if (!GhostiTunnelEngine.isRunning.get()) {
+                    GhostiTunnelEngine.startEngine(host, devId)
+                }
+
+                return START_STICKY
+            }
         }
-
-        isServiceRunning = true
-        prefs.edit().putBoolean("proxy_active", true).apply()
-
-        var savedId = prefs.getString("device_id", null)
-        if (savedId.isNullOrBlank()) {
-            savedId = "node_" + UUID.randomUUID().toString().substring(0, 6)
-            prefs.edit().putString("device_id", savedId).apply()
-        }
-
-        val host = "167.104.104.21"
-        val devId = intent?.getStringExtra("deviceId") ?: savedId
-        GhostiTunnelEngine.deviceId = devId
-
-        acquirePersistentLocks()
-        startInForeground()
-
-        if (!GhostiTunnelEngine.isRunning.get()) {
-            GhostiTunnelEngine.startEngine(host, devId)
-        }
-
-        return START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Keeps the service alive when swiped from RAM without restarting or dropping
         val prefs = getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
         if (prefs.getBoolean("proxy_active", false)) {
             acquirePersistentLocks()
@@ -90,7 +99,7 @@ class ProxyForegroundService : Service() {
 
     private fun startInForeground() {
         try {
-            val notification = buildSimpleNotification()
+            val notification = buildCleanNotification()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     NOTIF_ID,
@@ -103,7 +112,7 @@ class ProxyForegroundService : Service() {
         } catch (_: Exception) {}
     }
 
-    private fun buildSimpleNotification(): Notification {
+    private fun buildCleanNotification(): Notification {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -129,7 +138,6 @@ class ProxyForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Ultra-clean, static, non-questionable notification (No upload arrow, no stats)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle("Ghosti")
