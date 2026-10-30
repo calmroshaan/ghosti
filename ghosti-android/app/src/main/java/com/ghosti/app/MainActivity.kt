@@ -1,5 +1,6 @@
 package com.ghosti.app
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -8,6 +9,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -38,10 +40,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvOneLineBox: TextView
     private lateinit var switchStealth: Switch
 
+    companion object {
+        private const val VPN_REQUEST_CODE = 100
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Status bar & Navigation bar dark tech styling
         window.statusBarColor = Color.parseColor("#070B19")
         window.navigationBarColor = Color.parseColor("#070B19")
 
@@ -94,7 +99,6 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // 1. Header Bar (Ghosti Logo + Status Pill)
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -137,7 +141,6 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(space(20))
 
-        // 2. Hero Connection Card (Blue-Cyan Gradient)
         val heroCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(18))
@@ -174,7 +177,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         tvTraffic = TextView(this).apply {
-            text = "Traffic: ↑ 0.0 MB   |   ↓ 0.0 MB"
+            text = "Traffic: UP 0.00 MB   |   DOWN 0.00 MB"
             setTextColor(Color.parseColor("#7DD3FC"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(10), 0, 0)
@@ -188,7 +191,6 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(space(18))
 
-        // 3. VPS Relay IP Input Box
         val vpsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
@@ -203,7 +205,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         etVpsIp = EditText(this).apply {
-            hint = "Enter your Sweden VPS IP (e.g. 45.12.34.56)"
+            hint = "Enter your Sweden VPS IP"
             setHintTextColor(Color.parseColor("#64748B"))
             setText(initialVpsIp)
             setTextColor(Color.WHITE)
@@ -218,7 +220,6 @@ class MainActivity : AppCompatActivity() {
         vpsCard.visibility = View.GONE
         root.addView(vpsCard)
 
-        // 4. Main Power Button (START / STOP PROXY)
         btnStartStop = Button(this).apply {
             text = "START PROXY SERVER"
             setTextColor(Color.WHITE)
@@ -238,7 +239,6 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(space(18))
 
-        // 5. Proxy Credentials Card (For Dolphin{anty} / Browsers)
         val credsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(16), dp(18), dp(16))
@@ -275,7 +275,6 @@ class MainActivity : AppCompatActivity() {
             background = roundedBox("#070B19", 10, "#1E293B")
         }
 
-        // Action Buttons Row (Copy / Share / Reset Password)
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(14), 0, 0)
@@ -316,7 +315,6 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(space(16))
 
-        // 6. Stealth / Hide Notification Mode Card
         val stealthCard = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -347,22 +345,11 @@ class MainActivity : AppCompatActivity() {
 
         switchStealth = Switch(this).apply {
             isChecked = initialStealth
-            setOnCheckedChangeListener { _, isChecked ->
-                getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
-                    .edit().putBoolean("stealth_mode", isChecked).apply()
-                ProxyForegroundService.stealthMode = isChecked
-                if (GhostiTunnelEngine.isRunning.get()) {
-                    val intent = Intent(this@MainActivity, ProxyForegroundService::class.java).apply {
-                        action = ProxyForegroundService.ACTION_UPDATE_STEALTH
-                        putExtra("stealth", isChecked)
-                    }
-                    startService(intent)
-                }
-            }
         }
 
         stealthCard.addView(stealthTextCol)
         stealthCard.addView(switchStealth)
+        stealthCard.visibility = View.GONE
         root.addView(stealthCard)
 
         scrollView.addView(root)
@@ -377,29 +364,50 @@ class MainActivity : AppCompatActivity() {
             startService(stopIntent)
             refreshUI()
         } else {
-            val host = etVpsIp.text.toString().trim()
-            if (host.isEmpty()) {
-                Toast.makeText(this, "Please enter your VPS IP first!", Toast.LENGTH_LONG).show()
-                return
-            }
-
-            getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
-                .edit().putString("vps_ip", host).apply()
-
-            val startIntent = Intent(this, ProxyForegroundService::class.java).apply {
-                action = ProxyForegroundService.ACTION_START
-                putExtra("vpsHost", host)
-                putExtra("deviceId", GhostiTunnelEngine.deviceId)
-                putExtra("stealth", switchStealth.isChecked)
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(startIntent)
+            // Prepare System-Bound VpnService (asks 1-time permission on first ever run)
+            val vpnIntent = VpnService.prepare(this)
+            if (vpnIntent != null) {
+                @Suppress("DEPRECATION")
+                startActivityForResult(vpnIntent, VPN_REQUEST_CODE)
             } else {
-                startService(startIntent)
+                startProxyServiceNow()
             }
-            refreshUI()
         }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == VPN_REQUEST_CODE) {
+            if (resultCode == Activity.RESULT_OK) {
+                startProxyServiceNow()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Please allow connection permission so Ghosti stays active in background!",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun startProxyServiceNow() {
+        val host = "167.104.104.21"
+        getSharedPreferences("ghosti_prefs", Context.MODE_PRIVATE)
+            .edit().putString("vps_ip", host).apply()
+
+        val startIntent = Intent(this, ProxyForegroundService::class.java).apply {
+            action = ProxyForegroundService.ACTION_START
+            putExtra("vpsHost", host)
+            putExtra("deviceId", GhostiTunnelEngine.deviceId)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(startIntent)
+        } else {
+            startService(startIntent)
+        }
+        refreshUI()
     }
 
     private fun refreshUI() {
@@ -415,7 +423,7 @@ class MainActivity : AppCompatActivity() {
 
         val upMb = String.format("%.2f", GhostiTunnelEngine.bytesUp / (1024.0 * 1024.0))
         val downMb = String.format("%.2f", GhostiTunnelEngine.bytesDown / (1024.0 * 1024.0))
-        tvTraffic.text = "Traffic: ↑ $upMb MB   |   ↓ $downMb MB"
+        tvTraffic.text = "Traffic: UP $upMb MB   |   DOWN $downMb MB"
 
         if (connected) {
             tvStatusBadge.text = "ONLINE • PORT ${GhostiTunnelEngine.assignedPort}"
